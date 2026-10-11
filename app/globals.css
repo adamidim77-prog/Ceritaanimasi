@@ -422,5 +422,73 @@ select {
   .frame.loading {
     animation: none;
   }
-    }
-  
+}
+
+/* ---------- langkah 3 dan 4 ---------- */
+.vrow {
+  display: grid;
+  grid-template-columns: 64px 1fr;
+  gap: 14px;
+  padding: 14px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.thumb {
+  aspect-ratio: 9 / 16;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--ink);
+  border: 1px dashed var(--line);
+  display: grid;
+  place-items: center;
+  font-family: var(--font-display), system-ui, sans-serif;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+audio {
+  width: 100%;
+}
+
+.bar {
+  height: 12px;
+  border-radius: 999px;
+  background: var(--ink);
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+
+.bar > span {
+  display: block;
+  height: 100%;
+  background: var(--marigold);
+  transition: width 0.2s;
+}
+
+.player {
+  display: block;
+  width: 100%;
+  max-width: 300px;
+  margin: 0 auto;
+  aspect-ratio: 9 / 16;
+  border-radius: 12px;
+  background: #000;
+}
+
+.copyrow {
+  display: grid;
+  gap: 8px;
+}
+
+.copyrow label {
+  font-weight: 600;
+  }
