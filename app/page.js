@@ -260,6 +260,316 @@ export default function Home() {
   }
 
   async function makeAllVoices() {
+    return sum + (s.audio ? 8 : Math.max(3, words / 2.3 + 0.8));
+    }, 0)
+  );
+  const canSplit = p.story.trim().length >= 30 && !busy.scenes;
+  const hasScenes = p.scenes.length > 0;
+
+  const stepBtn = (n, title, disabled) => (
+    <li>
+      <button
+        type="button"
+        className="step"
+        aria-current={p.step === n ? "step" : undefined}
+        disabled={disabled}
+        onClick={() => goStep(n)}
+      >
+        <b>{n}</b>
+        <span>{title}</span>
+      </button>
+    </li>
+  );
+
+  return (
+    <main className="wrap">
+      <header className="top">
+        <div>
+          <h1>CeritaAnimasi</h1>
+          <p>Tulis cerita, jadikan adegan bergambar, lalu video vertikal siap upload.</p>
+        </div>
+        <button type="button" className="btn btn-quiet btn-sm" onClick={newProject}>
+          Proyek baru
+        </button>
+      </header>
+
+      <ol className="stepper" aria-label="Langkah">
+        {stepBtn(1, "Cerita", false)}
+        {stepBtn(2, "Adegan", !hasScenes)}
+        {stepBtn(3, "Suara", !hasScenes)}
+        {stepBtn(4, "Video", !hasScenes)}
+      </ol>
+
+      {!ready ? (
+        <p className="hint">Memuat proyek...</p>
+      ) : p.step === 1 ? (
+        <section className="card" aria-labelledby="h-cerita">
+          <h2 id="h-cerita">Tulis ceritamu</h2>
+
+          <div className="field">
+            <label htmlFor="idea">Ide atau topik</label>
+            <textarea
+              id="idea"
+              rows={2}
+              placeholder="Contoh: semut kecil yang tidak mau menyerah membawa remah roti walau hujan turun"
+              value={p.idea}
+              onChange={(e) => set({ idea: e.target.value })}
+            />
+            <div className="actions">
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={writeStory}
+                disabled={busy.story || !p.idea.trim()}
+              >
+                {busy.story ? "Menulis cerita..." : "Buatkan cerita dengan AI"}
+              </button>
+            </div>
+            {msg.story && <p className="err">{msg.story}</p>}
+          </div>
+
+          <div className="field">
+            <label htmlFor="story">Cerita</label>
+            <textarea
+              id="story"
+              rows={9}
+              placeholder="Tulis ceritamu sendiri di sini, atau buat dengan AI di atas."
+              value={p.story}
+              onChange={(e) => set({ story: e.target.value })}
+            />
+            <p className="hint">
+              {p.story.trim() ? p.story.trim().split(/\s+/).length : 0} kata. Kamu bebas mengedit
+              hasil AI sebelum lanjut.
+            </p>
+          </div>
+
+          <div className="row two">
+            <div className="field">
+              <label htmlFor="lang">Bahasa</label>
+              <select id="lang" value={p.lang} onChange={(e) => set({ lang: e.target.value })}>
+                {LANGS.map((l) => (
+                  <option key={l.value} value={l.value}>
+                    {l.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="field">
+              <span className="label">Durasi video</span>
+              <div className="chips">
+                {DURATIONS.map((d) => (
+                  <button
+                    key={d.value}
+                    type="button"
+                    className="chip"
+                    aria-pressed={p.durasi === d.value}
+                    onClick={() => set({ durasi: d.value })}
+                  >
+                    {d.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="field">
+            <span className="label">Gaya gambar</span>
+            <div className="chips">
+              {Object.entries(STYLES).map(([key, st]) => (
+                <button
+                  key={key}
+                  type="button"
+                  className="chip"
+                  aria-pressed={p.style === key}
+                  onClick={() => set({ style: key })}
+                >
+                  {st.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="field">
+            <div className="actions">
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={splitScenes}
+                disabled={!canSplit}
+              >
+                {busy.scenes ? "Memecah adegan..." : "Pecah jadi adegan"}
+              </button>
+              {hasScenes && (
+                <button type="button" className="btn" onClick={() => goStep(2)}>
+                  Kembali ke adegan
+                </button>
+              )}
+            </div>
+            {p.story.trim().length < 30 && (
+              <p className="hint">Cerita minimal 30 karakter sebelum bisa dipecah.</p>
+            )}
+            {msg.scenes && <p className="err">{msg.scenes}</p>}
+          </div>
+        </section>
+      ) : p.step === 2 ? (
+        <section aria-labelledby="h-adegan" style={{ display: "grid", gap: 16 }}>
+          <div className="card">
+            <h2 id="h-adegan">Adegan dan gambar</h2>
+            <div className="summary">
+              <span>
+                <b>{p.scenes.length}</b> adegan
+              </span>
+              <span>
+                <b>{doneImages}</b> gambar siap
+              </span>
+              <span>
+                Gambar AI hari ini: <b>{usage}</b>
+              </span>
+            </div>
+
+            <div className="field">
+              <label htmlFor="char">Tokoh dan suasana (bahasa Inggris)</label>
+              <textarea
+                id="char"
+                rows={3}
+                value={p.character}
+                onChange={(e) => set({ character: e.target.value })}
+              />
+              <p className="hint">
+                Teks ini disisipkan ke semua prompt gambar supaya tokoh tetap sama di setiap adegan.
+              </p>
+            </div>
+
+            <div className="actions">
+              <button type="button" className="btn" onClick={() => goStep(1)}>
+                Ubah cerita
+              </button>
+            </div>
+          </div>
+
+          <ol className="scenes">
+            {p.scenes.map((s, i) => (
+              <li key={s.id} className="scene">
+                <div
+                  className={`frame${s.image ? " has" : ""}${busy[s.id] ? " loading" : ""}`}
+                  aria-live="polite"
+                >
+                  {s.image ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={s.image} alt={`Gambar adegan ${i + 1}`} />
+                  ) : busy[s.id] ? (
+                    <span>Membuat gambar...</span>
+                  ) : (
+                    <span>Belum ada gambar</span>
+                  )}
+                  <span className="num">{i + 1}</span>
+                </div>
+
+                <div className="scene-body">
+                  <div className="field">
+                    <label htmlFor={`n-${s.id}`}>Narasi</label>
+                    <textarea
+                      id={`n-${s.id}`}
+                      value={s.narasi}
+                      onChange={(e) => setScene(s.id, { narasi: e.target.value })}
+                    />
+                  </div>
+                  <div className="field">
+                    <label htmlFor={`p-${s.id}`}>Prompt gambar (bahasa Inggris)</label>
+                    <textarea
+                      id={`p-${s.id}`}
+                      value={s.prompt}
+                      onChange={(e) => setScene(s.id, { prompt: e.target.value })}
+                    />
+                  </div>
+
+                  <div className="actions">
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-sm"
+                      onClick={() => makeImage(s)}
+                      disabled={busy[s.id] || !s.prompt.trim()}
+                    >
+                      {s.image ? "Buat ulang gambar AI" : "Buat gambar AI"}
+                    </button>
+                    <label className="btn btn-sm" style={{ cursor: "pointer" }}>
+                      Upload gambar
+                      <input
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp"
+                        hidden
+                        onChange={(e) => {
+                          onFile(s, e.target.files?.[0]);
+                          e.target.value = "";
+                        }}
+                      />
+                    </label>
+                    <button type="button" className="btn btn-sm" onClick={() => copyPrompt(s)}>
+                      Salin prompt
+                    </button>
+                    {s.image && (
+                      <button
+                        type="button"
+                        className="btn btn-quiet btn-sm"
+                        onClick={() => setScene(s.id, { image: "" })}
+                      >
+                        Hapus gambar
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="btn btn-danger btn-sm"
+                      onClick={() => removeScene(s.id)}
+                    >
+                      Hapus adegan
+                    </button>
+                  </div>
+                  {msg[s.id] && <p className="err">{msg[s.id]}</p>}
+                </div>
+              </li>
+            ))}
+          </ol>
+
+          <div className="actions">
+            <button type="button" className="btn" onClick={addScene}>
+              Tambah adegan
+            </button>
+            <button type="button" className="btn btn-primary" onClick={() => goStep(3)}>
+              Lanjut ke Suara
+            </button>
+          </div>
+          <p className="note">
+            Adegan tanpa gambar akan dilewati saat video dibuat. Untuk menghemat kuota, buat gambar
+            satu per satu atau upload gambar buatan sendiri.
+          </p>
+        </section>
+      ) : p.step === 3 ? (
+        <section aria-labelledby="h-suara" style={{ display: "grid", gap: 16 }}>
+          <div className="card">
+            <h2 id="h-suara">Suara narasi</h2>
+            <div className="summary">
+              <span>
+                <b>{doneAudio}</b> dari <b>{p.scenes.length}</b> suara siap
+              </span>
+            </div>
+
+            <div className="field">
+              <span className="label">Pilih suara AI</span>
+              <div className="chips">
+                {VOICES.map((v) => (
+                  <button
+                    key={v.id}
+                    type="button"
+                    className="chip"
+                    aria-pressed={p.voice === v.id}
+                    onClick={() => set({ voice: v.id })}
+                  >
+                    {v.label}
+                  </button>
+                ))}
+              </div>
+              <p className="hint">
+                Ganti suara hanya berlaku untuk suara yang dibuat sesudahnya. Buat ulang adegan yang
     stopAll.current = false;
     setMsgKey("voices", "");
     setBusyKey("all", true);
