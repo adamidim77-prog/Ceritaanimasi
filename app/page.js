@@ -260,7 +260,140 @@ export default function Home() {
   }
 
   async function makeAllVoices() {
-    return sum + (s.audio ? 8 : Math.max(3, words / 2.3 + 0.8));
+    stopAll.current = false;
+    setMsgKey("voices", "");
+    setBusyKey("all", true);
+    try {
+      for (let i = 0; i < p.scenes.length; i++) {
+        const s = p.scenes[i];
+        if (stopAll.current) break;
+        if (s.audio || !s.narasi.trim()) continue;
+        const key = "a" + s.id;
+        setBusyKey(key, true);
+        try {
+          const d = await api("/api/tts", { text: s.narasi, voice: p.voice });
+          setScene(s.id, { audio: `data:${d.mime};base64,${d.data}` });
+        } catch (e) {
+          setMsgKey(key, e.message);
+          setMsgKey("voices", `Berhenti di adegan ${i + 1}: ${e.message}`);
+          break;
+        } finally {
+          setBusyKey(key, false);
+        }
+        await wait(1500);
+      }
+    } finally {
+      setBusyKey("all", false);
+    }
+  }
+
+  async function onAudioFile(s, file) {
+    if (!file) return;
+    if (!file.type.startsWith("audio/")) {
+      setMsgKey("a" + s.id, "File harus berupa audio (MP3, WAV, M4A).");
+      return;
+    }
+    if (file.size > 15 * 1024 * 1024) {
+      setMsgKey("a" + s.id, "File audio terlalu besar (maksimal 15 MB).");
+      return;
+    }
+    try {
+      const url = await fileToDataUrl(file);
+      setScene(s.id, { audio: url });
+      setMsgKey("a" + s.id, "");
+    } catch (e) {
+      setMsgKey("a" + s.id, e.message);
+    }
+  }
+
+  async function onMusicFile(file) {
+    if (!file) return;
+    if (!file.type.startsWith("audio/")) {
+      setMsgKey("music", "File harus berupa audio (MP3, WAV, M4A).");
+      return;
+    }
+    if (file.size > 15 * 1024 * 1024) {
+      setMsgKey("music", "File musik terlalu besar (maksimal 15 MB).");
+      return;
+    }
+    try {
+      const url = await fileToDataUrl(file);
+      set({ music: url, musicName: file.name });
+      setMsgKey("music", "");
+    } catch (e) {
+      setMsgKey("music", e.message);
+    }
+  }
+
+  /* ---------- langkah 4 ---------- */
+  async function doRender() {
+    const usable = p.scenes.filter((s) => s.image);
+    if (!usable.length) {
+      setRender({ ...IDLE, status: "error", msg: "Belum ada adegan yang punya gambar." });
+      return;
+    }
+    if (render.url) URL.revokeObjectURL(render.url);
+    const ac = new AbortController();
+    abortRef.current = ac;
+    setRender({ ...IDLE, status: "running" });
+    let lock = null;
+    try {
+      lock = await navigator.wakeLock?.request("screen");
+    } catch {}
+    try {
+      const fontFamily = getComputedStyle(document.body).fontFamily;
+      const r = await renderVideo({
+        scenes: usable,
+        music: p.music,
+        quality: p.quality,
+        fontFamily,
+        signal: ac.signal,
+        onProgress: (v) => setRender((x) => ({ ...x, progress: v })),
+      });
+      const url = URL.createObjectURL(r.blob);
+      setRender({ status: "done", progress: 1, url, ext: r.ext, msg: "" });
+    } catch (e) {
+      setRender({ ...IDLE, status: "error", msg: e.message || "Render gagal." });
+    } finally {
+      try {
+        lock?.release();
+      } catch {}
+    }
+  }
+
+  async function makeMeta() {
+    setMsgKey("meta", "");
+    setBusyKey("meta", true);
+    try {
+      const d = await api("/api/meta", { story: p.story, lang: p.lang });
+      set({ meta: d });
+    } catch (e) {
+      setMsgKey("meta", e.message);
+    } finally {
+      setBusyKey("meta", false);
+    }
+  }
+
+  async function newProject() {
+    if (!window.confirm("Mulai proyek baru? Proyek yang sekarang akan dihapus dari perangkat ini."))
+      return;
+    try {
+      await clearProject();
+    } catch {}
+    abortRef.current?.abort();
+    setP(EMPTY);
+    setMsg({});
+    setRender(IDLE);
+    window.scrollTo({ top: 0 });
+  }
+
+  const doneImages = p.scenes.filter((s) => s.image).length;
+  const doneAudio = p.scenes.filter((s) => s.audio).length;
+  const usableScenes = p.scenes.filter((s) => s.image);
+  const estSeconds = Math.round(
+    usableScenes.reduce((sum, s) => {
+      const words = (s.narasi || "").trim().split(/\s+/).filter(Boolean).length;
+return sum + (s.audio ? 8 : Math.max(3, words / 2.3 + 0.8));
     }, 0)
   );
   const canSplit = p.story.trim().length >= 30 && !busy.scenes;
@@ -507,501 +640,4 @@ export default function Home() {
                     <button type="button" className="btn btn-sm" onClick={() => copyPrompt(s)}>
                       Salin prompt
                     </button>
-                    {s.image && (
-                      <button
-                        type="button"
-                        className="btn btn-quiet btn-sm"
-                        onClick={() => setScene(s.id, { image: "" })}
-                      >
-                        Hapus gambar
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      className="btn btn-danger btn-sm"
-                      onClick={() => removeScene(s.id)}
-                    >
-                      Hapus adegan
-                    </button>
-                  </div>
-                  {msg[s.id] && <p className="err">{msg[s.id]}</p>}
-                </div>
-              </li>
-            ))}
-          </ol>
-
-          <div className="actions">
-            <button type="button" className="btn" onClick={addScene}>
-              Tambah adegan
-            </button>
-            <button type="button" className="btn btn-primary" onClick={() => goStep(3)}>
-              Lanjut ke Suara
-            </button>
-          </div>
-          <p className="note">
-            Adegan tanpa gambar akan dilewati saat video dibuat. Untuk menghemat kuota, buat gambar
-            satu per satu atau upload gambar buatan sendiri.
-          </p>
-        </section>
-      ) : p.step === 3 ? (
-        <section aria-labelledby="h-suara" style={{ display: "grid", gap: 16 }}>
-          <div className="card">
-            <h2 id="h-suara">Suara narasi</h2>
-            <div className="summary">
-              <span>
-                <b>{doneAudio}</b> dari <b>{p.scenes.length}</b> suara siap
-              </span>
-            </div>
-
-            <div className="field">
-              <span className="label">Pilih suara AI</span>
-              <div className="chips">
-                {VOICES.map((v) => (
-                  <button
-                    key={v.id}
-                    type="button"
-                    className="chip"
-                    aria-pressed={p.voice === v.id}
-                    onClick={() => set({ voice: v.id })}
-                  >
-                    {v.label}
-                  </button>
-                ))}
-              </div>
-              <p className="hint">
-                Ganti suara hanya berlaku untuk suara yang dibuat sesudahnya. Buat ulang adegan yang
-    stopAll.current = false;
-    setMsgKey("voices", "");
-    setBusyKey("all", true);
-    try {
-      for (let i = 0; i < p.scenes.length; i++) {
-        const s = p.scenes[i];
-        if (stopAll.current) break;
-        if (s.audio || !s.narasi.trim()) continue;
-        const key = "a" + s.id;
-        setBusyKey(key, true);
-        try {
-          const d = await api("/api/tts", { text: s.narasi, voice: p.voice });
-          setScene(s.id, { audio: `data:${d.mime};base64,${d.data}` });
-        } catch (e) {
-          setMsgKey(key, e.message);
-          setMsgKey("voices", `Berhenti di adegan ${i + 1}: ${e.message}`);
-          break;
-        } finally {
-          setBusyKey(key, false);
-        }
-        await wait(1500);
-      }
-    } finally {
-      setBusyKey("all", false);
-    }
-  }
-
-  async function onAudioFile(s, file) {
-    if (!file) return;
-    if (!file.type.startsWith("audio/")) {
-      setMsgKey("a" + s.id, "File harus berupa audio (MP3, WAV, M4A).");
-      return;
-    }
-    if (file.size > 15 * 1024 * 1024) {
-      setMsgKey("a" + s.id, "File audio terlalu besar (maksimal 15 MB).");
-      return;
-    }
-    try {
-      const url = await fileToDataUrl(file);
-      setScene(s.id, { audio: url });
-      setMsgKey("a" + s.id, "");
-    } catch (e) {
-      setMsgKey("a" + s.id, e.message);
-    }
-  }
-
-  async function onMusicFile(file) {
-    if (!file) return;
-    if (!file.type.startsWith("audio/")) {
-      setMsgKey("music", "File harus berupa audio (MP3, WAV, M4A).");
-      return;
-    }
-    if (file.size > 15 * 1024 * 1024) {
-      setMsgKey("music", "File musik terlalu besar (maksimal 15 MB).");
-      return;
-    }
-    try {
-      const url = await fileToDataUrl(file);
-      set({ music: url, musicName: file.name });
-      setMsgKey("music", "");
-    } catch (e) {
-      setMsgKey("music", e.message);
-    }
-  }
-
-  /* ---------- langkah 4 ---------- */
-  async function doRender() {
-    const usable = p.scenes.filter((s) => s.image);
-    if (!usable.length) {
-      setRender({ ...IDLE, status: "error", msg: "Belum ada adegan yang punya gambar." });
-      return;
-    }
-    if (render.url) URL.revokeObjectURL(render.url);
-    const ac = new AbortController();
-    abortRef.current = ac;
-    setRender({ ...IDLE, status: "running" });
-    let lock = null;
-    try {
-      lock = await navigator.wakeLock?.request("screen");
-    } catch {}
-    try {
-      const fontFamily = getComputedStyle(document.body).fontFamily;
-      const r = await renderVideo({
-        scenes: usable,
-        music: p.music,
-        quality: p.quality,
-        fontFamily,
-        signal: ac.signal,
-        onProgress: (v) => setRender((x) => ({ ...x, progress: v })),
-      });
-      const url = URL.createObjectURL(r.blob);
-      setRender({ status: "done", progress: 1, url, ext: r.ext, msg: "" });
-    } catch (e) {
-      setRender({ ...IDLE, status: "error", msg: e.message || "Render gagal." });
-    } finally {
-      try {
-        lock?.release();
-      } catch {}
-    }
-  }
-
-  async function makeMeta() {
-    setMsgKey("meta", "");
-    setBusyKey("meta", true);
-    try {
-      const d = await api("/api/meta", { story: p.story, lang: p.lang });
-      set({ meta: d });
-    } catch (e) {
-      setMsgKey("meta", e.message);
-    } finally {
-      setBusyKey("meta", false);
-    }
-  }
-
-  async function newProject() {
-    if (!window.confirm("Mulai proyek baru? Proyek yang sekarang akan dihapus dari perangkat ini."))
-      return;
-    try {
-      await clearProject();
-    } catch {}
-    abortRef.current?.abort();
-    setP(EMPTY);
-    setMsg({});
-    setRender(IDLE);
-    window.scrollTo({ top: 0 });
-  }
-
-  const doneImages = p.scenes.filter((s) => s.image).length;
-  const doneAudio = p.scenes.filter((s) => s.audio).length;
-  const usableScenes = p.scenes.filter((s) => s.image);
-  const estSeconds = Math.round(
-    usableScenes.reduce((sum, s) => {
-      const words = (s.narasi || "").trim().split(/\s+/).filter(Boolean).length;
-lama kalau mau disamakan.
-              </p>
-            </div>
-
-            <div className="actions">
-              <button
-                type="button"
-                className="btn btn-primary"
-                onClick={makeAllVoices}
-                disabled={busy.all}
-              >
-                {busy.all ? "Membuat suara..." : "Buat semua suara"}
-              </button>
-              {busy.all && (
-                <button
-                  type="button"
-                  className="btn"
-                  onClick={() => {
-                    stopAll.current = true;
-                  }}
-                >
-                  Berhenti
-                </button>
-              )}
-            </div>
-            {msg.voices && <p className="err">{msg.voices}</p>}
-            <p className="hint">
-              Suara AI juga memakai kuota. Kalau habis, upload rekaman sendiri di tiap adegan. Adegan
-              tanpa suara tetap masuk video (tanpa narasi, hanya subtitle).
-            </p>
-          </div>
-
-          <ol className="scenes">
-            {p.scenes.map((s, i) => (
-              <li key={s.id} className="vrow">
-                <div className="thumb">
-                  {s.image ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={s.image} alt="" />
-                  ) : (
-                    <span>{i + 1}</span>
-                  )}
-                </div>
-                <div className="scene-body">
-                  <p>
-                    <b>Adegan {i + 1}.</b> {s.narasi || "(narasi kosong)"}
-                  </p>
-                  {s.audio && <audio controls preload="none" src={s.audio} />}
-                  <div className="actions">
-                    <button
-                      type="button"
-                      className="btn btn-primary btn-sm"
-                      onClick={() => makeVoice(s)}
-                      disabled={busy["a" + s.id] || !s.narasi.trim()}
-                    >
-                      {busy["a" + s.id]
-                        ? "Membuat..."
-                        : s.audio
-                        ? "Buat ulang suara"
-                        : "Buat suara AI"}
-                    </button>
-                    <label className="btn btn-sm" style={{ cursor: "pointer" }}>
-                      Upload suara
-                      <input
-                        type="file"
-                        accept="audio/*"
-                        hidden
-                        onChange={(e) => {
-                          onAudioFile(s, e.target.files?.[0]);
-                          e.target.value = "";
-                        }}
-                      />
-                    </label>
-                    {s.audio && (
-                      <button
-                        type="button"
-                        className="btn btn-quiet btn-sm"
-                        onClick={() => setScene(s.id, { audio: "" })}
-                      >
-                        Hapus suara
-                      </button>
-                    )}
-                  </div>
-                  {msg["a" + s.id] && <p className="err">{msg["a" + s.id]}</p>}
-                </div>
-              </li>
-            ))}
-          </ol>
-
-          <div className="card">
-            <h2>Musik latar (opsional)</h2>
-            <p className="hint">
-              Pakai musik bebas hak cipta supaya aman dimonetisasi. Volumenya dibuat pelan di bawah
-              suara narasi.
-            </p>
-            {p.music ? (
-              <div className="field">
-                <p>
-                  <b>{p.musicName || "Musik latar"}</b>
-                </p>
-                <audio controls preload="none" src={p.music} />
-                <div className="actions">
-                  <button
-                    type="button"
-                    className="btn btn-quiet btn-sm"
-                    onClick={() => set({ music: "", musicName: "" })}
-                  >
-                    Hapus musik
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div className="actions">
-                <label className="btn btn-sm" style={{ cursor: "pointer" }}>
-                  Upload musik (MP3/WAV)
-                  <input
-                    type="file"
-                    accept="audio/*"
-                    hidden
-                    onChange={(e) => {
-                      onMusicFile(e.target.files?.[0]);
-                      e.target.value = "";
-                    }}
-                  />
-                </label>
-              </div>
-            )}
-            {msg.music && <p className="err">{msg.music}</p>}
-          </div>
-
-          <div className="actions">
-            <button type="button" className="btn" onClick={() => goStep(2)}>
-              Kembali
-            </button>
-            <button type="button" className="btn btn-primary" onClick={() => goStep(4)}>
-              Lanjut ke Video
-            </button>
-          </div>
-        </section>
-      ) : (
-        <section aria-labelledby="h-video" style={{ display: "grid", gap: 16 }}>
-          <div className="card">
-            <h2 id="h-video">Buat video</h2>
-            <div className="summary">
-              <span>
-                <b>{usableScenes.length}</b> adegan dipakai
-              </span>
-              {p.scenes.length - usableScenes.length > 0 && (
-                <span>
-                  <b>{p.scenes.length - usableScenes.length}</b> adegan dilewati (belum ada gambar)
-                </span>
-              )}
-              <span>
-                Perkiraan durasi: <b>{estSeconds} detik</b>
-              </span>
-            </div>
-
-            <div className="field">
-              <span className="label">Kualitas</span>
-              <div className="chips">
-                <button
-                  type="button"
-                  className="chip"
-                  aria-pressed={p.quality === "720"}
-                  onClick={() => set({ quality: "720" })}
-                >
-                  720p (stabil, disarankan)
-                </button>
-                <button
-                  type="button"
-                  className="chip"
-                  aria-pressed={p.quality === "1080"}
-                  onClick={() => set({ quality: "1080" })}
-                >
-                  1080p (lebih tajam, berat)
-                </button>
-              </div>
-            </div>
-
-            <p className="note">
-              Video direkam langsung di browser dan berjalan real-time, jadi durasinya sama dengan
-              lama proses. Selama proses, jangan pindah tab, jangan kunci layar, dan biarkan halaman
-              ini terbuka.
-            </p>
-
-            <div className="actions">
-              <button
-                type="button"
-                className="btn btn-primary"
-                onClick={doRender}
-                disabled={render.status === "running" || usableScenes.length === 0}
-              >
-                {render.status === "running"
-                  ? "Sedang merender..."
-                  : render.status === "done"
-                  ? "Buat ulang video"
-                  : "Buat video"}
-              </button>
-              {render.status === "running" && (
-                <button type="button" className="btn" onClick={() => abortRef.current?.abort()}>
-                  Batalkan
-                </button>
-              )}
-              <button type="button" className="btn btn-quiet" onClick={() => goStep(3)}>
-                Kembali
-              </button>
-            </div>
-
-            {render.status === "running" && (
-              <div className="field" role="status" aria-live="polite">
-                <div
-                  className="bar"
-                  role="progressbar"
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-valuenow={Math.round(render.progress * 100)}
-                >
-                  <span style={{ width: `${Math.round(render.progress * 100)}%` }} />
-                </div>
-                <p className="hint">{Math.round(render.progress * 100)}% selesai</p>
-              </div>
-            )}
-            {render.status === "error" && <p className="err">{render.msg}</p>}
-          </div>
-
-          {render.status === "done" && (
-            <div className="card">
-              <h2>Video siap</h2>
-              <video className="player" src={render.url} controls playsInline />
-              <div className="actions">
-                <a
-                  className="btn btn-primary"
-                  href={render.url}
-                  download={`cerita-animasi.${render.ext}`}
-                >
-                  Download video ({render.ext.toUpperCase()})
-                </a>
-              </div>
-              {render.ext === "webm" && (
-                <p className="hint">
-                  Browser ini menghasilkan format WebM. YouTube menerimanya, tapi Instagram biasanya
-                  butuh MP4. Ubah dulu lewat CapCut atau pengubah video online, atau pakai Chrome
-                  terbaru yang bisa langsung menghasilkan MP4.
-                </p>
-              )}
-            </div>
-          )}
-
-          <div className="card">
-            <h2>Teks untuk upload</h2>
-            <p className="hint">
-              Judul, deskripsi, dan hashtag untuk kamu tempel saat upload sendiri ke YouTube dan
-              Instagram.
-            </p>
-            <div className="actions">
-              <button
-                type="button"
-                className="btn btn-primary"
-                onClick={makeMeta}
-                disabled={busy.meta || p.story.trim().length < 20}
-              >
-                {busy.meta ? "Membuat..." : p.meta ? "Buat ulang teks" : "Buatkan judul dan hashtag"}
-              </button>
-            </div>
-            {msg.meta && <p className="err">{msg.meta}</p>}
-            {p.meta &&
-              [
-                ["Judul", "title"],
-                ["Deskripsi", "description"],
-                ["Hashtag", "hashtags"],
-              ].map(([label, key]) => (
-                <div key={key} className="copyrow">
-                  <label htmlFor={`m-${key}`}>{label}</label>
-                  <textarea
-                    id={`m-${key}`}
-                    rows={key === "description" ? 4 : 2}
-                    value={p.meta[key] || ""}
-                    onChange={(e) => set({ meta: { ...p.meta, [key]: e.target.value } })}
-                  />
-                  <div className="actions">
-                    <button
-                      type="button"
-                      className="btn btn-sm"
-                      onClick={() => copyText(p.meta[key] || "", label)}
-                    >
-                      Salin {label.toLowerCase()}
-                    </button>
-                  </div>
-                </div>
-              ))}
-          </div>
-        </section>
-      )}
-
-      {toast && (
-        <div className="toast" role="status">
-          {toast}
-        </div>
-      )}
-    </main>
-  );
-        }
+                    {s.image &&
