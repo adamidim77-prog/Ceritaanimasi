@@ -4,6 +4,14 @@ import { useEffect, useRef, useState } from "react";
 import { STYLES, DURATIONS, LANGS, buildImagePrompt } from "../lib/prompts";
 import { loadProject, saveProject, clearProject } from "../lib/store";
 import { fitToPortrait, fileToDataUrl } from "../lib/image";
+import { renderVideo } from "../lib/render";
+
+const VOICES = [
+  { id: "Kore", label: "Wanita, tegas" },
+  { id: "Aoede", label: "Wanita, ringan" },
+  { id: "Puck", label: "Pria, ceria" },
+  { id: "Charon", label: "Pria, tenang" },
+];
 
 const EMPTY = {
   idea: "",
@@ -14,10 +22,18 @@ const EMPTY = {
   character: "",
   scenes: [],
   step: 1,
+  voice: "Kore",
+  music: "",
+  musicName: "",
+  quality: "720",
+  meta: null,
 };
+
+const IDLE = { status: "idle", progress: 0, url: "", ext: "", msg: "" };
 
 const uid = () => Math.random().toString(36).slice(2, 9);
 const todayKey = () => new Date().toLocaleDateString("sv-SE");
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function api(path, body) {
   let res;
@@ -46,7 +62,10 @@ export default function Home() {
   const [msg, setMsg] = useState({});
   const [usage, setUsage] = useState(0);
   const [toast, setToast] = useState("");
+  const [render, setRender] = useState(IDLE);
   const saveTimer = useRef(null);
+  const stopAll = useRef(false);
+  const abortRef = useRef(null);
 
   // muat proyek dan hitungan gambar AI hari ini
   useEffect(() => {
@@ -80,6 +99,13 @@ export default function Home() {
     } catch {}
   }, [usage, ready]);
 
+  // bersihkan URL video saat halaman ditutup
+  useEffect(() => {
+    return () => {
+      if (render.url) URL.revokeObjectURL(render.url);
+    };
+  }, [render.url]);
+
   const set = (patch) => setP((prev) => ({ ...prev, ...patch }));
   const setScene = (id, patch) =>
     setP((prev) => ({
@@ -92,7 +118,21 @@ export default function Home() {
     setToast(t);
     setTimeout(() => setToast(""), 2000);
   };
+  const goStep = (n) => {
+    set({ step: n });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
 
+  async function copyText(text, label) {
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast(`${label} disalin`);
+    } catch {
+      window.prompt("Salin teks ini:", text);
+    }
+  }
+
+  /* ---------- langkah 1 ---------- */
   async function writeStory() {
     setMsgKey("story", "");
     setBusyKey("story", true);
@@ -113,8 +153,8 @@ export default function Home() {
 
   async function splitScenes() {
     if (
-      p.scenes.some((s) => s.image) &&
-      !window.confirm("Memecah ulang akan menghapus gambar adegan yang sudah ada. Lanjutkan?")
+      p.scenes.some((s) => s.image || s.audio) &&
+      !window.confirm("Memecah ulang akan menghapus gambar dan suara adegan yang sudah ada. Lanjutkan?")
     )
       return;
     setMsgKey("scenes", "");
@@ -124,8 +164,15 @@ export default function Home() {
       const d = await api("/api/scenes", { story: p.story, lang: p.lang, count });
       set({
         character: d.character,
-        scenes: d.scenes.map((s) => ({ id: uid(), narasi: s.narasi, prompt: s.prompt, image: "" })),
+        scenes: d.scenes.map((s) => ({
+          id: uid(),
+          narasi: s.narasi,
+          prompt: s.prompt,
+          image: "",
+          audio: "",
+        })),
         step: 2,
+        meta: null,
       });
       window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (e) {
@@ -135,6 +182,7 @@ export default function Home() {
     }
   }
 
+  /* ---------- langkah 2 ---------- */
   async function makeImage(s) {
     setMsgKey(s.id, "");
     setBusyKey(s.id, true);
@@ -177,21 +225,153 @@ export default function Home() {
 
   async function copyPrompt(s) {
     const text = buildImagePrompt({ style: p.style, character: p.character, prompt: s.prompt });
-    try {
-      await navigator.clipboard.writeText(text);
-      showToast("Prompt disalin");
-    } catch {
-      window.prompt("Salin prompt ini:", text);
-    }
+    copyText(text, "Prompt");
   }
 
   function addScene() {
-    set({ scenes: [...p.scenes, { id: uid(), narasi: "", prompt: "", image: "" }] });
+    set({
+      scenes: [...p.scenes, { id: uid(), narasi: "", prompt: "", image: "", audio: "" }],
+    });
   }
 
   function removeScene(id) {
     if (!window.confirm("Hapus adegan ini?")) return;
     set({ scenes: p.scenes.filter((s) => s.id !== id) });
+  }
+
+  /* ---------- langkah 3 ---------- */
+  async function makeVoice(s) {
+    const key = "a" + s.id;
+    setMsgKey(key, "");
+    setBusyKey(key, true);
+    try {
+      const d = await api("/api/tts", { text: s.narasi, voice: p.voice });
+      setScene(s.id, { audio: `data:${d.mime};base64,${d.data}` });
+    } catch (e) {
+      setMsgKey(
+        key,
+        e.status === 429
+          ? `${e.message} Pakai Upload suara (rekaman sendiri atau buatan aplikasi lain).`
+          : e.message
+      );
+    } finally {
+      setBusyKey(key, false);
+    }
+  }
+
+  async function makeAllVoices() {
+    stopAll.current = false;
+    setMsgKey("voices", "");
+    setBusyKey("all", true);
+    try {
+      for (let i = 0; i < p.scenes.length; i++) {
+        const s = p.scenes[i];
+        if (stopAll.current) break;
+        if (s.audio || !s.narasi.trim()) continue;
+        const key = "a" + s.id;
+        setBusyKey(key, true);
+        try {
+          const d = await api("/api/tts", { text: s.narasi, voice: p.voice });
+          setScene(s.id, { audio: `data:${d.mime};base64,${d.data}` });
+        } catch (e) {
+          setMsgKey(key, e.message);
+          setMsgKey("voices", `Berhenti di adegan ${i + 1}: ${e.message}`);
+          break;
+        } finally {
+          setBusyKey(key, false);
+        }
+        await wait(1500);
+      }
+    } finally {
+      setBusyKey("all", false);
+    }
+  }
+
+  async function onAudioFile(s, file) {
+    if (!file) return;
+    if (!file.type.startsWith("audio/")) {
+      setMsgKey("a" + s.id, "File harus berupa audio (MP3, WAV, M4A).");
+      return;
+    }
+    if (file.size > 15 * 1024 * 1024) {
+      setMsgKey("a" + s.id, "File audio terlalu besar (maksimal 15 MB).");
+      return;
+    }
+    try {
+      const url = await fileToDataUrl(file);
+      setScene(s.id, { audio: url });
+      setMsgKey("a" + s.id, "");
+    } catch (e) {
+      setMsgKey("a" + s.id, e.message);
+    }
+  }
+
+  async function onMusicFile(file) {
+    if (!file) return;
+    if (!file.type.startsWith("audio/")) {
+      setMsgKey("music", "File harus berupa audio (MP3, WAV, M4A).");
+      return;
+    }
+    if (file.size > 15 * 1024 * 1024) {
+      setMsgKey("music", "File musik terlalu besar (maksimal 15 MB).");
+      return;
+    }
+    try {
+      const url = await fileToDataUrl(file);
+      set({ music: url, musicName: file.name });
+      setMsgKey("music", "");
+    } catch (e) {
+      setMsgKey("music", e.message);
+    }
+  }
+
+  /* ---------- langkah 4 ---------- */
+  async function doRender() {
+    const usable = p.scenes.filter((s) => s.image);
+    if (!usable.length) {
+      setRender({ ...IDLE, status: "error", msg: "Belum ada adegan yang punya gambar." });
+      return;
+    }
+    if (render.url) URL.revokeObjectURL(render.url);
+    const ac = new AbortController();
+    abortRef.current = ac;
+    setRender({ ...IDLE, status: "running" });
+    let lock = null;
+    try {
+      lock = await navigator.wakeLock?.request("screen");
+    } catch {}
+    try {
+      const fontFamily = getComputedStyle(document.body).fontFamily;
+      const r = await renderVideo({
+        scenes: usable,
+        music: p.music,
+        quality: p.quality,
+        fontFamily,
+        signal: ac.signal,
+        onProgress: (v) => setRender((x) => ({ ...x, progress: v })),
+      });
+      const url = URL.createObjectURL(r.blob);
+      setRender({ status: "done", progress: 1, url, ext: r.ext, msg: "" });
+    } catch (e) {
+      setRender({ ...IDLE, status: "error", msg: e.message || "Render gagal." });
+    } finally {
+      try {
+        lock?.release();
+      } catch {}
+    }
+  }
+
+  async function makeMeta() {
+    setMsgKey("meta", "");
+    setBusyKey("meta", true);
+    try {
+      const d = await api("/api/meta", { story: p.story, lang: p.lang });
+      set({ meta: d });
+    } catch (e) {
+      setMsgKey("meta", e.message);
+    } finally {
+      setBusyKey("meta", false);
+    }
   }
 
   async function newProject() {
@@ -200,13 +380,39 @@ export default function Home() {
     try {
       await clearProject();
     } catch {}
+    abortRef.current?.abort();
     setP(EMPTY);
     setMsg({});
+    setRender(IDLE);
     window.scrollTo({ top: 0 });
   }
 
   const doneImages = p.scenes.filter((s) => s.image).length;
+  const doneAudio = p.scenes.filter((s) => s.audio).length;
+  const usableScenes = p.scenes.filter((s) => s.image);
+  const estSeconds = Math.round(
+    usableScenes.reduce((sum, s) => {
+      const words = (s.narasi || "").trim().split(/\s+/).filter(Boolean).length;
+      return sum + (s.audio ? 8 : Math.max(3, words / 2.3 + 0.8));
+    }, 0)
+  );
   const canSplit = p.story.trim().length >= 30 && !busy.scenes;
+  const hasScenes = p.scenes.length > 0;
+
+  const stepBtn = (n, title, disabled) => (
+    <li>
+      <button
+        type="button"
+        className="step"
+        aria-current={p.step === n ? "step" : undefined}
+        disabled={disabled}
+        onClick={() => goStep(n)}
+      >
+        <b>{n}</b>
+        <span>{title}</span>
+      </button>
+    </li>
+  );
 
   return (
     <main className="wrap">
@@ -221,43 +427,10 @@ export default function Home() {
       </header>
 
       <ol className="stepper" aria-label="Langkah">
-        <li>
-          <button
-            type="button"
-            className="step"
-            aria-current={p.step === 1 ? "step" : undefined}
-            onClick={() => set({ step: 1 })}
-          >
-            <b>1</b>
-            <span>Cerita</span>
-          </button>
-        </li>
-        <li>
-          <button
-            type="button"
-            className="step"
-            aria-current={p.step === 2 ? "step" : undefined}
-            disabled={p.scenes.length === 0}
-            onClick={() => set({ step: 2 })}
-          >
-            <b>2</b>
-            <span>Adegan</span>
-          </button>
-        </li>
-        <li>
-          <button type="button" className="step" disabled>
-            <b>3</b>
-            <span>Suara</span>
-            <small>Menyusul</small>
-          </button>
-        </li>
-        <li>
-          <button type="button" className="step" disabled>
-            <b>4</b>
-            <span>Video</span>
-            <small>Menyusul</small>
-          </button>
-        </li>
+        {stepBtn(1, "Cerita", false)}
+        {stepBtn(2, "Adegan", !hasScenes)}
+        {stepBtn(3, "Suara", !hasScenes)}
+        {stepBtn(4, "Video", !hasScenes)}
       </ol>
 
       {!ready ? (
@@ -359,8 +532,8 @@ export default function Home() {
               >
                 {busy.scenes ? "Memecah adegan..." : "Pecah jadi adegan"}
               </button>
-              {p.scenes.length > 0 && (
-                <button type="button" className="btn" onClick={() => set({ step: 2 })}>
+              {hasScenes && (
+                <button type="button" className="btn" onClick={() => goStep(2)}>
                   Kembali ke adegan
                 </button>
               )}
@@ -371,7 +544,7 @@ export default function Home() {
             {msg.scenes && <p className="err">{msg.scenes}</p>}
           </div>
         </section>
-      ) : (
+      ) : p.step === 2 ? (
         <section aria-labelledby="h-adegan" style={{ display: "grid", gap: 16 }}>
           <div className="card">
             <h2 id="h-adegan">Adegan dan gambar</h2>
@@ -401,7 +574,7 @@ export default function Home() {
             </div>
 
             <div className="actions">
-              <button type="button" className="btn" onClick={() => set({ step: 1 })}>
+              <button type="button" className="btn" onClick={() => goStep(1)}>
                 Ubah cerita
               </button>
             </div>
@@ -467,48 +640,4 @@ export default function Home() {
                     <button type="button" className="btn btn-sm" onClick={() => copyPrompt(s)}>
                       Salin prompt
                     </button>
-                    {s.image && (
-                      <button
-                        type="button"
-                        className="btn btn-quiet btn-sm"
-                        onClick={() => setScene(s.id, { image: "" })}
-                      >
-                        Hapus gambar
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      className="btn btn-danger btn-sm"
-                      onClick={() => removeScene(s.id)}
-                    >
-                      Hapus adegan
-                    </button>
-                  </div>
-                  {msg[s.id] && <p className="err">{msg[s.id]}</p>}
-                </div>
-              </li>
-            ))}
-          </ol>
-
-          <div className="actions">
-            <button type="button" className="btn" onClick={addScene}>
-              Tambah adegan
-            </button>
-          </div>
-
-          <p className="note">
-            Langkah 3 (suara narasi) dan langkah 4 (render video) dibuat setelah langkah 1 dan 2
-            berjalan lancar. Untuk menghemat kuota, buat gambar satu per satu atau upload gambar
-            buatan sendiri.
-          </p>
-        </section>
-      )}
-
-      {toast && (
-        <div className="toast" role="status">
-          {toast}
-        </div>
-      )}
-    </main>
-  );
-      }
+                    {s.im
